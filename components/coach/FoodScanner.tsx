@@ -58,6 +58,8 @@ export function FoodScanner() {
   const demoMode = useStore((s) => s.demoMode);
   const logFood = useStore((s) => s.logFood);
   const fileRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const [isMobile, setIsMobile] = useState(false);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [preview, setPreview] = useState<string | null>(null); // data URL of upload
@@ -69,10 +71,25 @@ export function FoodScanner() {
 
   useEffect(() => {
     setScansUsed(readScansUsed());
+    // Touch devices (iPad/iPhone/Android) get the rock-solid native camera via
+    // a capture input; the in-app getUserMedia preview is unreliable on iOS
+    // Safari (black frame) so we only use it on desktop with a real webcam.
+    const coarse = window.matchMedia?.("(pointer: coarse)").matches;
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    setIsMobile(Boolean(coarse || iOS));
   }, []);
 
   const scansLeft = DAILY_SCAN_LIMIT - scansUsed;
   const limitReached = scansLeft <= 0;
+
+  // Open the camera: native full-screen camera on touch devices, in-app live
+  // preview on desktop.
+  function openCamera() {
+    if (limitReached) return;
+    if (isMobile) cameraInputRef.current?.click();
+    else setCameraOpen(true);
+  }
 
   function reset() {
     setPhase("idle");
@@ -173,7 +190,7 @@ export function FoodScanner() {
             </div>
           ) : (
             <button
-              onClick={() => setCameraOpen(true)}
+              onClick={openCamera}
               className="flex h-full w-full flex-col items-center justify-center gap-3 text-center transition hover:bg-white/[0.02]"
             >
               <span className="grid h-16 w-16 place-items-center rounded-full bg-brand-gradient-soft">
@@ -213,6 +230,15 @@ export function FoodScanner() {
             ref={fileRef}
             type="file"
             accept="image/*"
+            onChange={onFile}
+            className="hidden"
+          />
+          {/* Native camera on touch devices — opens the OS full-screen camera. */}
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
             onChange={onFile}
             className="hidden"
           />
@@ -311,7 +337,7 @@ export function FoodScanner() {
                 </div>
                 <div className="mt-3 flex gap-2">
                   <button
-                    onClick={() => setCameraOpen(true)}
+                    onClick={openCamera}
                     disabled={phase === "scanning" || limitReached}
                     className="btn-gradient flex flex-1 items-center justify-center gap-2 rounded-full py-2.5 text-sm font-semibold disabled:opacity-50"
                   >
