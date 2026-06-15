@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -17,6 +17,7 @@ import {
   ImageOff,
   PlugZap,
   AlertCircle,
+  ShieldAlert,
 } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AnimatedNumber } from "@/components/ui/AnimatedNumber";
@@ -25,6 +26,31 @@ import { CameraCapture } from "@/components/coach/CameraCapture";
 import { useStore } from "@/lib/store";
 import { SAMPLE_FOODS, GRADE_COLOR, type FoodResult } from "@/lib/foodScanner";
 import { scanFoodImage, type ScanOutcome } from "@/lib/scanClient";
+
+const DAILY_SCAN_LIMIT = 5;
+const SCAN_STORAGE_KEY = "activai_photo_scans";
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function readScansUsed(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = localStorage.getItem(SCAN_STORAGE_KEY);
+    if (!raw) return 0;
+    const { date, count } = JSON.parse(raw) as { date: string; count: number };
+    return date === todayKey() ? count : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function incrementScans(): number {
+  const next = readScansUsed() + 1;
+  localStorage.setItem(SCAN_STORAGE_KEY, JSON.stringify({ date: todayKey(), count: next }));
+  return next;
+}
 
 type Phase = "idle" | "scanning" | "result";
 
@@ -39,6 +65,14 @@ export function FoodScanner() {
   const [outcome, setOutcome] = useState<ScanOutcome | null>(null);
   const [toast, setToast] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [scansUsed, setScansUsed] = useState(0);
+
+  useEffect(() => {
+    setScansUsed(readScansUsed());
+  }, []);
+
+  const scansLeft = DAILY_SCAN_LIMIT - scansUsed;
+  const limitReached = scansLeft <= 0;
 
   function reset() {
     setPhase("idle");
@@ -60,7 +94,11 @@ export function FoodScanner() {
 
   // Shared analysis for any captured/uploaded photo.
   // Demo → labelled sample; live → real Gemini Vision detection.
+  // Limited to DAILY_SCAN_LIMIT photo scans per day (sample meals are exempt).
   async function analyze(dataUrl: string) {
+    if (limitReached) return;
+    const used = incrementScans();
+    setScansUsed(used);
     setEmojiPreview(null);
     setPreview(dataUrl);
     setPhase("scanning");
@@ -95,13 +133,24 @@ export function FoodScanner() {
             <p className="text-xs text-hint">Snap a meal — get instant nutrition</p>
           </div>
         </div>
-        <span
-          className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${
-            demoMode ? "bg-metric-active/15 text-metric-active" : "bg-brand-violet/20 text-brand-violet-soft"
-          }`}
-        >
-          {demoMode ? "demo vision" : "live Gemini Vision"}
-        </span>
+        <div className="flex items-center gap-2">
+          {limitReached ? (
+            <span className="flex items-center gap-1 rounded-full bg-red-500/15 px-2.5 py-1 text-[10px] font-semibold text-red-400">
+              <ShieldAlert className="h-3 w-3" /> limit reached
+            </span>
+          ) : (
+            <span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-[10px] font-semibold text-muted">
+              {scansLeft}/{DAILY_SCAN_LIMIT} photos left today
+            </span>
+          )}
+          <span
+            className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${
+              demoMode ? "bg-metric-active/15 text-metric-active" : "bg-brand-violet/20 text-brand-violet-soft"
+            }`}
+          >
+            {demoMode ? "demo vision" : "live Gemini Vision"}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -112,6 +161,16 @@ export function FoodScanner() {
             <Image src={preview} alt="Meal to scan" fill className="object-cover" unoptimized />
           ) : emojiPreview ? (
             <div className="grid h-full w-full place-items-center text-[120px]">{emojiPreview}</div>
+          ) : limitReached ? (
+            <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center px-6">
+              <span className="grid h-16 w-16 place-items-center rounded-full bg-red-500/10">
+                <ShieldAlert className="h-8 w-8 text-red-400" />
+              </span>
+              <div>
+                <p className="text-sm font-semibold text-head">Daily photo limit reached</p>
+                <p className="text-xs text-hint">You&apos;ve used all {DAILY_SCAN_LIMIT} photo scans for today. Resets at midnight. Try a sample meal below!</p>
+              </div>
+            </div>
           ) : (
             <button
               onClick={() => setCameraOpen(true)}
@@ -253,14 +312,14 @@ export function FoodScanner() {
                 <div className="mt-3 flex gap-2">
                   <button
                     onClick={() => setCameraOpen(true)}
-                    disabled={phase === "scanning"}
+                    disabled={phase === "scanning" || limitReached}
                     className="btn-gradient flex flex-1 items-center justify-center gap-2 rounded-full py-2.5 text-sm font-semibold disabled:opacity-50"
                   >
                     <Camera className="h-4 w-4" /> Take photo
                   </button>
                   <button
                     onClick={() => fileRef.current?.click()}
-                    disabled={phase === "scanning"}
+                    disabled={phase === "scanning" || limitReached}
                     className="btn-ghost flex flex-1 items-center justify-center gap-2 rounded-full py-2.5 text-sm font-semibold disabled:opacity-50"
                   >
                     <Upload className="h-4 w-4" /> Upload
