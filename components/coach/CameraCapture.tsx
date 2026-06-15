@@ -88,16 +88,21 @@ export function CameraCapture({
     const video = videoRef.current;
     if (video) {
       video.srcObject = stream;
-      // iOS Safari needs these set as live attributes and only plays reliably
-      // once metadata has loaded — playing too early shows a black frame.
       video.setAttribute("playsinline", "true");
       video.muted = true;
+      // Mark ready as soon as the video has dimensions. iPad Safari often does
+      // NOT fire `playing` for a muted MediaStream, so relying on that alone
+      // leaves the loader stuck on a black frame. `loadedmetadata` is reliable.
+      const onMeta = () => {
+        if (!activeRef.current) return;
+        setReady(true);
+        video.play().catch(() => {}); // best-effort live preview (muted autoplay)
+      };
+      if (video.readyState >= 1) onMeta();
+      else video.onloadedmetadata = onMeta;
       video.onplaying = () => {
         if (activeRef.current) setReady(true);
       };
-      const tryPlay = () => video.play().catch(() => {});
-      if (video.readyState >= 1) tryPlay();
-      else video.onloadedmetadata = tryPlay;
     }
   }, [facing, stop]);
 
@@ -142,7 +147,7 @@ export function CameraCapture({
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.94, y: 16 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-strong flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl"
+        className="glass-strong flex max-h-[92dvh] w-full max-w-md flex-col overflow-hidden rounded-3xl"
       >
         <div className="flex shrink-0 items-center justify-between px-5 py-3.5">
           <p className="flex items-center gap-2 text-sm font-semibold text-head">
@@ -153,7 +158,7 @@ export function CameraCapture({
           </button>
         </div>
 
-        <div className="relative aspect-[3/4] max-h-[60vh] w-full shrink bg-black">
+        <div className="relative aspect-[3/4] max-h-[60dvh] w-full shrink bg-black">
           {error ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
               <span className="grid h-14 w-14 place-items-center rounded-full bg-metric-heart/15">
