@@ -4,6 +4,7 @@ import { gradeFromScore, type FoodResult } from "@/lib/foodScanner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30; // allow Gemini Vision time to respond
 
 const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
@@ -55,7 +56,7 @@ export async function POST(req: NextRequest) {
         { text: PROMPT },
         { inlineData: { mimeType, data } },
       ]),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 9000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000)),
     ])) as Awaited<ReturnType<typeof model.generateContent>>;
 
     const text = result.response.text().replace(/```json|```/g, "").trim();
