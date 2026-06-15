@@ -44,11 +44,24 @@ export function CameraCapture({
           return;
         }
         streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => {});
+        const video = videoRef.current;
+        if (video) {
+          video.srcObject = stream;
+          // iOS Safari needs these set as live attributes and only plays
+          // reliably once metadata has loaded — playing too early shows a
+          // black frame. Mark "ready" when the video actually starts.
+          video.setAttribute("playsinline", "true");
+          video.muted = true;
+          video.onplaying = () => {
+            if (active) setReady(true);
+          };
+          const tryPlay = () => video.play().catch(() => {});
+          if (video.readyState >= 1) {
+            tryPlay();
+          } else {
+            video.onloadedmetadata = tryPlay;
+          }
         }
-        setReady(true);
       } catch (e) {
         const name = (e as DOMException)?.name;
         setError(
@@ -98,9 +111,9 @@ export function CameraCapture({
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.94, y: 16 }}
         onClick={(e) => e.stopPropagation()}
-        className="glass-strong w-full max-w-md overflow-hidden rounded-3xl"
+        className="glass-strong flex max-h-[92vh] w-full max-w-md flex-col overflow-hidden rounded-3xl"
       >
-        <div className="flex items-center justify-between px-5 py-3.5">
+        <div className="flex shrink-0 items-center justify-between px-5 py-3.5">
           <p className="flex items-center gap-2 text-sm font-semibold text-head">
             <Aperture className="h-4 w-4 text-brand-violet-soft" /> Scan a meal
           </p>
@@ -109,7 +122,7 @@ export function CameraCapture({
           </button>
         </div>
 
-        <div className="relative aspect-[3/4] w-full bg-black">
+        <div className="relative aspect-[3/4] max-h-[60vh] w-full shrink bg-black">
           {error ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
               <span className="grid h-14 w-14 place-items-center rounded-full bg-metric-heart/15">
@@ -147,7 +160,7 @@ export function CameraCapture({
         </div>
 
         {!error && (
-          <div className="flex items-center justify-between px-6 py-4">
+          <div className="flex shrink-0 items-center justify-between px-6 py-4">
             <button
               onClick={onUploadInstead}
               className="btn-ghost grid h-11 w-11 place-items-center rounded-full"
