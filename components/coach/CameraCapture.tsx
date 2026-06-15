@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { X, Aperture, SwitchCamera, ImageOff, Upload } from "lucide-react";
+import { X, Aperture, SwitchCamera, ImageOff, Upload, RotateCcw } from "lucide-react";
 
 // Live in-browser camera (works on iPad/iPhone Safari over https, and on
 // localhost). Streams the rear camera, lets the user snap a frame, and returns
@@ -18,68 +18,97 @@ export function CameraCapture({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const activeRef = useRef(true);
   const [facing, setFacing] = useState<"environment" | "user">("environment");
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
-  useEffect(() => {
-    let active = true;
+  const stop = useCallback(() => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  }, []);
 
-    async function start() {
-      setReady(false);
-      setError(null);
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+  const start = useCallback(async () => {
+    setReady(false);
+    setError(null);
+    setErrorCode(null);
+    stop();
 
-      if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-        setError("This browser can't open the camera. Upload a photo instead.");
-        return;
-      }
+    // In-app browsers (opening the link inside Instagram/Discord/Gmail etc.)
+    // and non-secure contexts can't grant camera access at all.
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setErrorCode("unsupported");
+      setError(
+        "This browser can't open the camera. If you tapped a link inside another app (Instagram, Discord, Mail…), open the site directly in Safari, or just upload a photo."
+      );
+      return;
+    }
+
+    // Try the preferred camera first, then fall back to any available camera.
+    const attempts: MediaStreamConstraints[] = [
+      { video: { facingMode: { ideal: facing } }, audio: false },
+      { video: true, audio: false },
+    ];
+
+    let stream: MediaStream | null = null;
+    let lastErr: unknown = null;
+    for (const constraints of attempts) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facing } },
-          audio: false,
-        });
-        if (!active) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        streamRef.current = stream;
-        const video = videoRef.current;
-        if (video) {
-          video.srcObject = stream;
-          // iOS Safari needs these set as live attributes and only plays
-          // reliably once metadata has loaded — playing too early shows a
-          // black frame. Mark "ready" when the video actually starts.
-          video.setAttribute("playsinline", "true");
-          video.muted = true;
-          video.onplaying = () => {
-            if (active) setReady(true);
-          };
-          const tryPlay = () => video.play().catch(() => {});
-          if (video.readyState >= 1) {
-            tryPlay();
-          } else {
-            video.onloadedmetadata = tryPlay;
-          }
-        }
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        break;
       } catch (e) {
-        const name = (e as DOMException)?.name;
-        setError(
-          name === "NotAllowedError"
-            ? "Camera access was blocked. Allow the camera for this site, then try again."
-            : name === "NotFoundError"
-            ? "No camera was found on this device."
-            : "Couldn't start the camera. On the deployed (https) site it works in iPad Safari."
-        );
+        lastErr = e;
+        // A blocked permission won't be fixed by a looser constraint — stop.
+        if ((e as DOMException)?.name === "NotAllowedError") break;
       }
     }
 
+    if (!activeRef.current) {
+      stream?.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    if (!stream) {
+      const name = (lastErr as DOMException)?.name ?? "Error";
+      setErrorCode(name);
+      setError(
+        name === "NotAllowedError"
+          ? "Camera access is blocked for this site. On iPad: tap the “aA” in Safari's address bar → Website Settings → Camera → Allow, then tap Try again. Or upload a photo instead."
+          : name === "NotFoundError" || name === "OverconstrainedError"
+          ? "No usable camera was found on this device. Upload a photo instead."
+          : name === "NotReadableError"
+          ? "Another app is using the camera. Close it (or other camera tabs) and tap Try again."
+          : "Couldn't start the camera. Tap Try again, or upload a photo instead."
+      );
+      return;
+    }
+
+    streamRef.current = stream;
+    const video = videoRef.current;
+    if (video) {
+      video.srcObject = stream;
+      // iOS Safari needs these set as live attributes and only plays reliably
+      // once metadata has loaded — playing too early shows a black frame.
+      video.setAttribute("playsinline", "true");
+      video.muted = true;
+      video.onplaying = () => {
+        if (activeRef.current) setReady(true);
+      };
+      const tryPlay = () => video.play().catch(() => {});
+      if (video.readyState >= 1) tryPlay();
+      else video.onloadedmetadata = tryPlay;
+    }
+  }, [facing, stop]);
+
+  useEffect(() => {
+    activeRef.current = true;
     start();
     return () => {
-      active = false;
-      streamRef.current?.getTracks().forEach((t) => t.stop());
+      activeRef.current = false;
+      stop();
     };
-  }, [facing]);
+  }, [start, stop]);
 
   function shoot() {
     const video = videoRef.current;
@@ -94,9 +123,11 @@ export function CameraCapture({
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, w, h);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    stop();
     onCapture(dataUrl);
   }
+
+  const canRetry = errorCode !== "unsupported";
 
   return (
     <motion.div
@@ -130,12 +161,25 @@ export function CameraCapture({
               </span>
               <p className="text-sm font-semibold text-head">Camera unavailable</p>
               <p className="max-w-xs text-xs text-muted">{error}</p>
-              <button
-                onClick={onUploadInstead}
-                className="btn-gradient mt-1 flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-semibold"
-              >
-                <Upload className="h-4 w-4" /> Upload a photo instead
-              </button>
+              {errorCode && (
+                <p className="text-[10px] uppercase tracking-wide text-hint">code: {errorCode}</p>
+              )}
+              <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                {canRetry && (
+                  <button
+                    onClick={start}
+                    className="btn-ghost flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold"
+                  >
+                    <RotateCcw className="h-4 w-4" /> Try again
+                  </button>
+                )}
+                <button
+                  onClick={onUploadInstead}
+                  className="btn-gradient flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold"
+                >
+                  <Upload className="h-4 w-4" /> Upload a photo
+                </button>
+              </div>
             </div>
           ) : (
             <>
